@@ -1,0 +1,11 @@
+import express from 'express'; import { createAnalyticsRegistry, AnalyticsViewError } from './domain.mjs';
+const registry = createAnalyticsRegistry(); const app = express(); app.use(express.json()); const actor = req => ({ id: req.header('x-actor-id') || 'anonymous', role: req.header('x-role') || 'anonymous' });
+const handle = (response, work) => { try { response.json(work()); } catch (error) { const status = error instanceof AnalyticsViewError ? ({ VALIDATION: 400, FORBIDDEN: 403, NOT_FOUND: 404, CONFLICT: 409 }[error.code] || 500) : 500; response.status(status).json({ error: error.code || 'INTERNAL_ERROR', message: error.message }); } };
+app.get('/health', (_, response) => response.json({ status: 'ok', service: 'bigquery-supplier-analytics-governance', views: registry.count() }));
+app.post('/views', (request, response) => handle(response, () => registry.define(actor(request), request.body)));
+app.post('/views/:id/review', (request, response) => handle(response, () => registry.review(actor(request), request.params.id, request.body.evidence)));
+app.post('/views/:id/publish', (request, response) => handle(response, () => registry.publish(actor(request), request.params.id)));
+app.post('/views/:id/revoke', (request, response) => handle(response, () => registry.revoke(actor(request), request.params.id, request.body.reason)));
+app.get('/views/:id', (request, response) => handle(response, () => registry.get(request.params.id)));
+app.get('/audit-events', (_, response) => response.json({ events: registry.audit() }));
+app.listen(Number(process.env.ANALYTICS_PORT || 24600), '0.0.0.0', () => console.log('supplier analytics governance service ready'));

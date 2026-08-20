@@ -1,0 +1,14 @@
+export class AnalyticsViewError extends Error { constructor(code, message) { super(message); this.code = code; } }
+const requireRole = (actor, role) => { if (actor.role !== role) throw new AnalyticsViewError('FORBIDDEN', 'The actor is not authorized for this analytics view transition.'); };
+export function createAnalyticsRegistry() {
+  const views = new Map(); const audit = [];
+  const record = (action, viewId, actor, detail = {}) => audit.push({ id: `AUD-${audit.length + 1}`, action, viewId, actor, detail, at: new Date().toISOString() });
+  const get = id => { const view = views.get(id); if (!view) throw new AnalyticsViewError('NOT_FOUND', 'The supplier analytics view was not found.'); return view; };
+  return {
+    define(actor, input) { requireRole(actor, 'analytics-engineer'); if (!/^VIEW-[A-Z0-9]{3,}$/.test(input.id || '') || !input.supplier || input.supplier.trim().length < 3 || !input.dataset || !input.viewName || !Array.isArray(input.metrics) || input.metrics.length === 0) throw new AnalyticsViewError('VALIDATION', 'Identifier, supplier, dataset, view name, and metrics are required.'); if (views.has(input.id)) throw new AnalyticsViewError('CONFLICT', 'The analytics view identifier already exists.'); const view = { id: input.id, supplier: input.supplier.trim(), dataset: input.dataset, viewName: input.viewName, metrics: [...input.metrics], state: 'defined', queryReview: null }; views.set(view.id, view); record('view.defined', view.id, actor.id); return { ...view }; },
+    review(actor, id, evidence) { requireRole(actor, 'query-governor'); const view = get(id); if (view.state !== 'defined') throw new AnalyticsViewError('CONFLICT', 'Only defined views can complete query review.'); if (!evidence || evidence.trim().length < 25) throw new AnalyticsViewError('VALIDATION', 'Query review evidence must be at least 25 characters.'); view.state = 'reviewed'; view.queryReview = { by: actor.id, evidence: evidence.trim() }; record('view.reviewed', id, actor.id); return { ...view }; },
+    publish(actor, id) { requireRole(actor, 'analytics-operator'); const view = get(id); if (view.state !== 'reviewed') throw new AnalyticsViewError('CONFLICT', 'Only reviewed views can be published.'); view.state = 'published'; record('view.published', id, actor.id); return { ...view }; },
+    revoke(actor, id, reason) { requireRole(actor, 'analytics-operator'); const view = get(id); if (view.state !== 'published') throw new AnalyticsViewError('CONFLICT', 'Only published views can be revoked.'); if (!reason || reason.trim().length < 12) throw new AnalyticsViewError('VALIDATION', 'A detailed view revocation reason is required.'); view.state = 'revoked'; record('view.revoked', id, actor.id, { reason: reason.trim() }); return { ...view }; },
+    get: id => ({ ...get(id) }), audit: () => audit.map(item => ({ ...item })), count: () => views.size
+  };
+}
